@@ -14,10 +14,12 @@ import (
 	"gorm.io/gorm/schema"
 )
 
-type Protobuf struct {
+var timestampReflectType = reflect.TypeOf(&timestamppb.Timestamp{})
+
+type TimestampProtobuf struct {
 }
 
-func (*Protobuf) Scan(ctx context.Context, field *schema.Field, dst reflect.Value, dbValue any) error {
+func (*TimestampProtobuf) Scan(ctx context.Context, field *schema.Field, dst reflect.Value, dbValue any) error {
 	switch val := dbValue.(type) {
 	case time.Time:
 		return field.Set(ctx, dst, timestamppb.New(val))
@@ -28,7 +30,7 @@ func (*Protobuf) Scan(ctx context.Context, field *schema.Field, dst reflect.Valu
 	}
 }
 
-func (*Protobuf) Value(ctx context.Context, field *schema.Field, dst reflect.Value, fieldValue any) (any, error) {
+func (*TimestampProtobuf) Value(ctx context.Context, field *schema.Field, dst reflect.Value, fieldValue any) (any, error) {
 	switch val := fieldValue.(type) {
 	case *timestamppb.Timestamp:
 		if val == nil {
@@ -43,11 +45,11 @@ func (*Protobuf) Value(ctx context.Context, field *schema.Field, dst reflect.Val
 	}
 }
 
-func (p *Protobuf) Name() string {
+func (p *TimestampProtobuf) Name() string {
 	return "timestamppb"
 }
 
-func (p *Protobuf) Initialize(db *gorm.DB) error {
+func (p *TimestampProtobuf) Initialize(db *gorm.DB) error {
 	var check = []error{
 		db.Callback().Delete().Before("gorm:before_delete").Register(p.Name(), p.BeforeDelete),
 		db.Callback().Create().Before("gorm:before_create").Register(p.Name(), p.BeforeCreate),
@@ -62,15 +64,15 @@ func (p *Protobuf) Initialize(db *gorm.DB) error {
 	return nil
 }
 
-func (p *Protobuf) BeforeCreate(db *gorm.DB) {
+func (p *TimestampProtobuf) BeforeCreate(db *gorm.DB) {
 	p.SetIfNil(db, db.Statement.ReflectValue, "CreatedAt", "UpdatedAt")
 }
 
-func (p *Protobuf) BeforeUpdate(db *gorm.DB) {
+func (p *TimestampProtobuf) BeforeUpdate(db *gorm.DB) {
 	p.SetIfNil(db, db.Statement.ReflectValue, "UpdatedAt")
 }
 
-func (p *Protobuf) BeforeQuery(db *gorm.DB) {
+func (p *TimestampProtobuf) BeforeQuery(db *gorm.DB) {
 	if db.Statement.Schema == nil || db.Statement.Unscoped {
 		return
 	}
@@ -80,15 +82,17 @@ func (p *Protobuf) BeforeQuery(db *gorm.DB) {
 	}
 
 	// Modify query to add deleteAt is NULL
-	db = db.Where(db.Statement.Table + "." + field.DBName + " IS NULL")
+	if conds := db.Statement.BuildCondition(db.Statement.Table + "." + field.DBName + " IS NULL"); len(conds) > 0 {
+		db.Statement.AddClause(clause.Where{Exprs: conds})
+	}
 }
 
-func (p *Protobuf) BeforeDelete(db *gorm.DB) {
+func (p *TimestampProtobuf) BeforeDelete(db *gorm.DB) {
 	if db.Statement.Schema == nil || db.Statement.Unscoped {
 		return
 	}
 	field, ok := db.Statement.Schema.FieldsByName["DeletedAt"]
-	if !ok || field.FieldType != reflect.TypeOf(&timestamppb.Timestamp{}) {
+	if !ok || field.FieldType != timestampReflectType {
 		return
 	}
 
@@ -99,7 +103,7 @@ func (p *Protobuf) BeforeDelete(db *gorm.DB) {
 	db.Statement.Build(db.Statement.DB.Callback().Update().Clauses...)
 }
 
-func (p *Protobuf) SetIfNil(db *gorm.DB, value reflect.Value, fields ...string) {
+func (p *TimestampProtobuf) SetIfNil(db *gorm.DB, value reflect.Value, fields ...string) {
 	if db.Statement.Schema == nil || db.Statement.Unscoped || len(fields) < 1 {
 		return
 	}
@@ -110,7 +114,8 @@ func (p *Protobuf) SetIfNil(db *gorm.DB, value reflect.Value, fields ...string) 
 		}
 	case reflect.Struct:
 		for idx := 0; idx < value.NumField(); idx++ {
-			if slices.Index(fields, value.Type().Field(idx).Name) < 0 {
+			if slices.Index(fields, value.Type().Field(idx).Name) < 0 ||
+				value.Type().Field(idx).Type != timestampReflectType {
 				continue
 			}
 			if value.Field(idx).IsNil() {
@@ -123,5 +128,5 @@ func (p *Protobuf) SetIfNil(db *gorm.DB, value reflect.Value, fields ...string) 
 }
 
 func init() {
-	schema.RegisterSerializer("timestamppb", &Protobuf{})
+	schema.RegisterSerializer("timestamppb", &TimestampProtobuf{})
 }
