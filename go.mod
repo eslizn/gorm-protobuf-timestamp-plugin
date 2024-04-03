@@ -1,4 +1,4 @@
-module gorm-protobuf-timestamp-plugin
+module github.com/eslizn/gorm-protobuf-timestamp-plugin
 
 go 1.21
 
